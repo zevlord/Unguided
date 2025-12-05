@@ -21,50 +21,51 @@ Seasonal ARIMA (SARIMAX) to forecast daily sales averages.
 @st.cache_data
 def load_and_clean_data(uploaded_file):
     """
-    Loads data and performs the specific cleaning steps defined in the notebook.
+    Loads data and performs cleaning steps.
+    Includes error handling for missing columns and whitespace.
     """
-    # Load Data (Notebook Cells 1-2)
-    # Using iterator for large files if necessary, but concatenating immediately for processing
     chunk_size = 500000
     chunks = []
     
-    # Read CSV
-    # Using pandas read_csv. If file is massive, this might take a moment.
-    # In a production app, we might limit rows, but here we process all to match the notebook.
+    # Load data in chunks
     for chunk in pd.read_csv(uploaded_file, chunksize=chunk_size):
         chunks.append(chunk)
     sales = pd.concat(chunks)
 
-    # Date Conversion (Notebook Cell 3)
+    # --- FIX: Clean Column Names ---
+    # This removes leading/trailing whitespace from column headers (e.g. "SalesDate " -> "SalesDate")
+    sales.columns = sales.columns.str.strip()
+
+    # --- Check for required columns before proceeding ---
+    required_col = "SalesDate"
+    if required_col not in sales.columns:
+        st.error(f"❌ KeyError: The column '{required_col}' was not found.")
+        st.write("Columns detected in your file:", list(sales.columns))
+        st.stop() # Stops execution so the app doesn't crash
+
+    # Date Conversion
     sales["SalesDate"] = pd.to_datetime(sales["SalesDate"])
 
-    # Drop Classification (Notebook Cell 4)
+    # Drop Classification if exists
     if "Classification" in sales.columns:
         sales = sales.drop("Classification", axis=1)
 
-    # Clean Size Column (Notebook Cell 5)
-    # Lowercase and remove specific characters
-    cleansize = sales['Size'].str.lower().str.replace('"', '').str.strip()
+    # Clean Size Column (Ensure 'Size' column exists first)
+    if 'Size' in sales.columns:
+        cleansize = sales['Size'].astype(str).str.lower().str.replace('"', '').str.strip()
 
-    # Feature Engineering: Extract Numeric Size (Notebook Cell 8)
-    stdSize = cleansize.str.extract(r'(\d+\.?\d*)')[0].astype(float).fillna(0)
+        # Feature Engineering
+        stdSize = cleansize.str.extract(r'(\d+\.?\d*)')[0].astype(float).fillna(0)
+        stdPack = cleansize.str.extract(r'(\d+)\s*pk')[0].astype(float).fillna(1)
 
-    # Feature Engineering: Extract Pack Size (Notebook Cell 9)
-    stdPack = cleansize.str.extract(r'(\d+)\s*pk')[0].astype(float).fillna(1)
+        multiplier = np.where(cleansize.str.contains('ml'), 1, 
+                     np.where(cleansize.str.contains('l') & ~cleansize.str.contains('ml'), 1000,
+                     np.where(cleansize.str.contains('oz'), 30, 0)))
 
-    # Feature Engineering: Calculate Multiplier (Notebook Cell 10)
-    multiplier = np.where(cleansize.str.contains('ml'), 1, 
-                 np.where(cleansize.str.contains('l') & ~cleansize.str.contains('ml'), 1000,
-                 np.where(cleansize.str.contains('oz'), 30, 0)))
-
-    # Calculate True Size (Notebook Cell 10)
-    sales['True Size/ml'] = stdSize * multiplier * stdPack
-
-    # Filter invalid sizes (Notebook Cell 11)
-    sales = sales[sales['True Size/ml'] > 0]
-
+        sales['True Size/ml'] = stdSize * multiplier * stdPack
+        sales = sales[sales['True Size/ml'] > 0]
+    
     return sales
-
 # Sidebar for File Upload
 st.sidebar.header("Data Upload")
 uploaded_file = st.sidebar.file_uploader("Upload 'SalesFINAL12312016.csv'", type=['csv'])
@@ -198,4 +199,5 @@ if uploaded_file is not None:
                     st.error(f"An error occurred: {e}")
 
 else:
+
     st.info("Please upload the 'SalesFINAL12312016.csv' file from the sidebar to begin.")
