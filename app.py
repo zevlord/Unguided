@@ -24,7 +24,7 @@ else:
 
     with tab1:
         st.header("Predict Product Sales")
-        st.markdown("Adjust parameters to forecast the `SalesDollars` for a specific product configuration.")
+        st.markdown("insert value")
 
         col1, col2, col3 = st.columns(3)
 
@@ -56,5 +56,6 @@ else:
                     st.error(result)
                 else:
                     st.success(f"Predicted Sales Revenue: ${result:,.2f}")
-                    st.info(f"At a price of ${price}, this implies selling approx. {int(result/price)} units.")
+                    st.info(f"At a price of ${price}, this implies selling approximately {int(result/price)} units.")
+
 
