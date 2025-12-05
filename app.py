@@ -20,7 +20,7 @@ if len(stores) == 0:
     st.error("Model artifacts not found! Please run `model.py` first to train the model and generate .sav files.")
 else:
     # Tabs for different functionalities
-    tab1 = st.tabs(["Sales Prediction"])
+    tab1, = st.tabs(["Sales Prediction"])
 
     with tab1:
         st.header("Predict Product Sales")
@@ -56,6 +56,5 @@ else:
                     st.error(result)
                 else:
                     st.success(f"Predicted Sales Revenue: ${result:,.2f}")
-                    
-                    # Context metric
                     st.info(f"At a price of ${price}, this implies selling approx. {int(result/price)} units.")
+
