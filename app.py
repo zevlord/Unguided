@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.metrics import r2_score
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 import warnings
 
@@ -13,37 +12,40 @@ warnings.filterwarnings("ignore")
 st.set_page_config(page_title="Liquor Sales Forecasting", layout="wide")
 
 st.title("🍷 Liquor Sales Analysis & Forecasting")
+st.caption("App Version: 3.0 (Dynamic Columns)") # VISUAL CONFIRMATION
 
-# --- Function: Load and Clean Data with Dynamic Columns ---
+# --- Function: Load and Clean Data using Mapped Columns ---
 @st.cache_data
-def load_and_clean_data(uploaded_file, date_col, size_col, value_col):
+def load_and_clean_data(uploaded_file, date_col_name, val_col_name, size_col_name):
     """
-    Loads data using user-defined column names.
+    Loads data using the specific column names selected by the user.
     """
-    chunk_size = 500000
-    chunks = []
-    
     # 1. Read Data
-    # Reset file pointer to beginning since we read headers earlier
+    # Reset file pointer to start to ensure we read from the beginning
     uploaded_file.seek(0)
-    for chunk in pd.read_csv(uploaded_file, chunksize=chunk_size):
-        chunks.append(chunk)
-    sales = pd.concat(chunks)
     
-    # Clean header whitespace
+    # Read CSV
+    # We read everything at once here. For 500k+ rows, this is okay for Streamlit Cloud.
+    sales = pd.read_csv(uploaded_file)
+    
+    # Clean header whitespace immediately
     sales.columns = sales.columns.str.strip()
 
-    # 2. Date Conversion (Using selected column)
+    # 2. Date Conversion
+    # We use the column name provided by the user (date_col_name)
     try:
-        sales[date_col] = pd.to_datetime(sales[date_col])
+        sales[date_col_name] = pd.to_datetime(sales[date_col_name], errors='coerce')
+        # Drop rows where date conversion failed
+        sales = sales.dropna(subset=[date_col_name])
     except Exception as e:
-        st.error(f"Error converting '{date_col}' to datetime: {e}")
+        st.error(f"Error converting column '{date_col_name}' to datetime. Details: {e}")
         st.stop()
 
-    # 3. Clean Size Column (Using selected column)
-    if size_col in sales.columns:
+    # 3. Clean Size Column
+    # We use the column name provided by the user (size_col_name)
+    if size_col_name in sales.columns:
         # Convert to string, lowercase, remove quotes
-        cleansize = sales[size_col].astype(str).str.lower().str.replace('"', '').str.strip()
+        cleansize = sales[size_col_name].astype(str).str.lower().str.replace('"', '').str.strip()
 
         # Extract numeric size
         stdSize = cleansize.str.extract(r'(\d+\.?\d*)')[0].astype(float).fillna(0)
@@ -65,19 +67,20 @@ def load_and_clean_data(uploaded_file, date_col, size_col, value_col):
 
 # --- Sidebar: Configuration ---
 st.sidebar.header("1. Upload Data")
-uploaded_file = st.sidebar.file_uploader("Upload Sales CSV", type=['csv'])
+uploaded_file = st.sidebar.file_uploader("Upload CSV", type=['csv'])
 
 if uploaded_file is not None:
-    # --- DYNAMIC COLUMN MAPPING ---
-    # Read just the header to populate dropdowns
+    # --- STEP A: Read Headers to Setup Dropdowns ---
+    # We read just the first row to get column names
     header_df = pd.read_csv(uploaded_file, nrows=0)
-    header_df.columns = header_df.columns.str.strip() # Strip whitespace immediately
+    # Strip whitespace from headers so they match our logic later
+    header_df.columns = header_df.columns.str.strip()
     all_cols = list(header_df.columns)
 
     st.sidebar.header("2. Map Columns")
-    st.sidebar.info("Select the correct columns from your file.")
+    st.sidebar.info("Please identify the columns in your file:")
 
-    # Try to auto-select based on common names, otherwise default to index 0
+    # Helper to guess index
     def get_index(options, search_strings):
         for s in search_strings:
             for i, opt in enumerate(options):
@@ -85,112 +88,74 @@ if uploaded_file is not None:
                     return i
         return 0
 
-    # Date Column Selector
+    # Date Selection
     date_col = st.sidebar.selectbox(
-        "Date Column", 
+        "Which column contains the Date?", 
         all_cols, 
         index=get_index(all_cols, ['date', 'time'])
     )
 
-    # Sales Value Selector
+    # Value Selection
     val_col = st.sidebar.selectbox(
-        "Sales Value ($) Column", 
+        "Which column contains the Sales Value ($)?", 
         all_cols, 
-        index=get_index(all_cols, ['dollar', 'amount', 'price', 'total'])
+        index=get_index(all_cols, ['dollar', 'amount', 'price', 'total', 'sale'])
     )
 
-    # Size Selector
+    # Size Selection
     size_col = st.sidebar.selectbox(
-        "Size/Description Column", 
+        "Which column contains the Size/Volume?", 
         all_cols, 
-        index=get_index(all_cols, ['size', 'desc', 'volume'])
+        index=get_index(all_cols, ['size', 'desc', 'volume', 'bottle'])
     )
 
-    # --- Process Data ---
-    with st.spinner('Processing Data...'):
-        sales_df = load_and_clean_data(uploaded_file, date_col, size_col, val_col)
-    
-    st.success(f"Loaded {len(sales_df):,} rows successfully!")
+    # --- STEP B: Process Data ---
+    if st.sidebar.button("Process Data"):
+        with st.spinner('Processing...'):
+            # Pass the USER SELECTED column names to the function
+            sales_df = load_and_clean_data(uploaded_file, date_col, val_col, size_col)
+        
+        st.success(f"Successfully processed {len(sales_df):,} rows.")
 
-    # --- Create Time Series ---
-    # Group by the selected Date column and Sum/Mean the selected Value column
-    salesing = sales_df.groupby(date_col)[val_col].mean()
-    salesing = salesing.asfreq('D').fillna(method='ffill')
+        # --- STEP C: Aggregate Time Series ---
+        # Group by the User Selected Date Column
+        salesing = sales_df.groupby(date_col)[val_col].mean()
+        salesing = salesing.asfreq('D').fillna(method='ffill')
 
-    # --- Visuals & Modeling ---
-    tab1, tab2, tab3 = st.tabs(["Data Preview", "Model Validation", "Forecast"])
-
-    with tab1:
-        st.subheader("Raw Data Preview")
+        # --- Visuals ---
+        st.subheader("Data Preview")
         st.dataframe(sales_df.head())
         
-        st.subheader("Time Series Visualization")
-        fig, ax = plt.subplots(figsize=(12, 5))
+        st.subheader("Sales Trends")
+        fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(salesing.index, salesing.values)
-        ax.set_title(f"Daily Average of {val_col}")
+        ax.set_title(f"Daily Trends ({val_col})")
         st.pyplot(fig)
 
-    with tab2:
-        st.subheader("SARIMAX Model Training")
+        # --- Forecasting ---
+        st.subheader("Forecasting (SARIMAX)")
         
-        c1, c2 = st.columns(2)
-        with c1:
-            p = st.number_input("p", 0, 5, 1)
-            d = st.number_input("d", 0, 2, 1)
-            q = st.number_input("q", 0, 5, 1)
-        with c2:
-            s = st.number_input("Seasonality (Days)", 1, 365, 7)
-
-        if st.button("Train Model"):
-            # Simple Train/Test Split
-            train_size = int(len(salesing) * 0.8)
-            train, test = salesing[0:train_size], salesing[train_size:]
+        # Simple forecasting logic for demo
+        train_size = int(len(salesing) * 0.9)
+        train, test = salesing[0:train_size], salesing[train_size:]
+        
+        try:
+            model = SARIMAX(train, order=(1, 1, 1), seasonal_order=(1, 1, 1, 7),
+                            enforce_stationarity=False, enforce_invertibility=False)
+            results = model.fit(disp=False)
+            pred = results.get_forecast(steps=len(test)).predicted_mean
             
-            with st.spinner("Training..."):
-                try:
-                    model = SARIMAX(train, order=(p, d, q), seasonal_order=(1, 1, 1, s),
-                                    enforce_stationarity=False, enforce_invertibility=False)
-                    results = model.fit(disp=False)
-                    
-                    forecast = results.get_forecast(steps=len(test))
-                    pred = forecast.predicted_mean
-                    pred.index = test.index # Align index for plotting
-
-                    r2 = r2_score(test, pred)
-                    
-                    fig2, ax2 = plt.subplots(figsize=(12, 6))
-                    ax2.plot(train.index, train, label='Train')
-                    ax2.plot(test.index, test, label='Test')
-                    ax2.plot(pred.index, pred, label='Forecast', color='red')
-                    ax2.set_title(f"SARIMAX Forecast (R2: {r2:.3f})")
-                    ax2.legend()
-                    st.pyplot(fig2)
-                    
-                except Exception as e:
-                    st.error(f"Modeling Error: {e}")
-
-    with tab3:
-        st.write("Predict Future (Full Dataset)")
-        days_future = st.slider("Days into future", 7, 90, 30)
-        
-        if st.button("Forecast Future"):
-            try:
-                full_model = SARIMAX(salesing, order=(p, d, q), seasonal_order=(1, 1, 1, s),
-                                     enforce_stationarity=False, enforce_invertibility=False)
-                res_full = full_model.fit(disp=False)
-                
-                future = res_full.get_forecast(steps=days_future)
-                fut_pred = future.predicted_mean
-                
-                fig3, ax3 = plt.subplots(figsize=(12, 6))
-                ax3.plot(salesing.index, salesing, label='Historical')
-                ax3.plot(fut_pred.index, fut_pred, label='Future', color='green')
-                ax3.legend()
-                st.pyplot(fig3)
-                
-                st.dataframe(fut_pred.head())
-            except Exception as e:
-                st.error(f"Error: {e}")
+            r2 = r2_score(test, pred)
+            st.metric("Model Accuracy (R2 Score)", f"{r2:.4f}")
+            
+            fig2, ax2 = plt.subplots(figsize=(10, 4))
+            ax2.plot(test.index, test, label='Actual')
+            ax2.plot(test.index, pred, label='Forecast', color='red')
+            ax2.legend()
+            st.pyplot(fig2)
+            
+        except Exception as e:
+            st.warning(f"Could not fit model on this data: {e}")
 
 else:
-    st.info("Awaiting CSV upload...")
+    st.info("Please upload a CSV file to proceed.")
